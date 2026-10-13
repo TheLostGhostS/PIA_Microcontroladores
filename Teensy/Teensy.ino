@@ -1,16 +1,28 @@
-#include "Messaging.hpp"
 #include "Timer.hpp"
 
 constexpr int PinIN1 = 7;
 constexpr int PinIN2 = 6;
 
-template<int PinA, int PinB>
 class Motor{
-
 public:
-    Motor(){
-        pinMode(PinA, OUTPUT);
-        pinMode(PinB, OUTPUT);
+
+    Motor() = default;
+    Motor(int pinA, int pinB){
+        initialize(pinA, pinB);
+    }
+
+    void initialize(int pinA, int pinB){
+        if(PinA < 0 && pinA >= 0){
+            PinA = pinA;
+            pinMode(PinA, OUTPUT);
+            digitalWrite(PinA, LOW);
+        }
+
+        if(PinB < 0 && pinB >= 0){
+            PinB = pinB;
+            pinMode(PinB, OUTPUT);
+            digitalWrite(PinB, LOW);
+        }
     }
 
     void update(){
@@ -34,9 +46,15 @@ public:
     };
 
     void changeSpeed(float in_speed){
-        if(in_speed > 100.0f || in_speed < -100.0f){
+        if(PinA < 0 || PinB < 0){
             return;
         }
+
+        if(in_speed > 100.0f || in_speed < -100.0f){
+            Serial.println(in_speed);
+            return;
+        }
+
         vel_percentage = in_speed;
         digitalWrite(PinA, LOW);
         digitalWrite(PinB, LOW);
@@ -62,6 +80,7 @@ public:
     
 private:
 
+    int PinA{-1}, PinB{-1};
     Timer vel_count{0};
     float vel_percentage{0};
     bool running{false};
@@ -70,13 +89,35 @@ private:
     
 };
 
+
+Timer ticking{1000000};
+int state{1};
+Motor DC1;
 void setup() {
     Serial.begin(115200);
     while(!Serial);
 
-    
+    DC1.initialize(PinIN1, PinIN2);
+  	ticking.restart();
 }
 
-void loop() {
 
+void loop() {
+    DC1.update();
+    if(ticking.expired()){
+        ticking.restart();
+        switch(state){
+            case 1:
+            DC1.changeSpeed(50);
+            break;
+            case 2:
+            DC1.changeSpeed(-50);
+            break;
+            default:
+            state = 0;
+            DC1.stop();
+        }
+        state++;
+    }
+    
 }
