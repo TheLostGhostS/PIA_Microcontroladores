@@ -1,8 +1,4 @@
 #include "Timer.hpp"
-
-constexpr int PinIN1 = 7;
-constexpr int PinIN2 = 6;
-
 class Motor{
 public:
 
@@ -89,21 +85,105 @@ private:
     
 };
 
+class ACS{
+    public:
+    ACS() = default;
+    ACS(int pin, int max_ = 10, uint32_t poll = 20000){
+        max = max_;
+        polling.setTimer(poll);
+        polling.restart();
+        initialize(pin);
+    }
 
-Timer ticking{1000000};
+    void initialize(int pin){
+        if(Pin < 0 && pin >= 0){
+            Pin = pin;
+            pinMode(Pin, INPUT);
+        }
+    }
+
+    void update(){
+        if(polling.active() && !polling.expired()){
+            return;
+        }
+        polling.restart();
+        cumulative += raw_read();
+        if(lectures++ == max){
+            pipe = cumulative / max;
+            ready = true;
+            cumulative = 0;
+            lectures = 0;
+        }
+    }
+
+    float raw_read(){
+        if(Pin < 0){
+            return 0;
+        }
+        float voltajeSensor= analogRead(A0)*(5.0 / 1023.0);  
+        return (voltajeSensor-2.5)/sencibility; 
+    }
+
+    float get_avarage(){
+        ready = false;
+        return pipe;
+    }
+
+    bool is_ready(){ return ready; }
+    void set_sencibility(float sens){ sencibility = sens; }
+    float get_sencibility(){ return sencibility; }
+    void set_max(float num){
+        if(num <= 0){
+            return;
+        }
+        max = num;
+    }
+    float get_max(){ return max; }
+    void set_poll(uint32_t num){
+        polling.setTimer(num);
+        polling.restart();
+    }
+
+    private:
+    int Pin{-1};
+    float sencibility{0.185};
+
+    // 20ms, 100ms per read non-blocking
+    Timer polling{20000}; 
+    float cumulative{0}, pipe{0};
+    int lectures{0}, max{5};
+    bool ready{false};
+
+};
+
+constexpr int PinIN1 = 7;
+constexpr int PinIN2 = 6;
+constexpr int PinAmp = A0;
+
+Timer ticking{20000};
 int state{1};
 Motor DC1;
+ACS sensor;
 void setup() {
     Serial.begin(115200);
     while(!Serial);
 
     DC1.initialize(PinIN1, PinIN2);
+    sensor.initialize(PinAmp);
   	ticking.restart();
 }
 
 
 void loop() {
+
+    sensor.update();
     DC1.update();
+
+    if(sensor.is_ready()){
+        Serial.print("Corriente: ");
+        Serial.println(sensor.get_avarage());
+    }
+
     if(ticking.expired()){
         ticking.restart();
         switch(state){
