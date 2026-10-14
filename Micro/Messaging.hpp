@@ -1,4 +1,3 @@
-#include <sys/_stdint.h>
 #pragma once
 // ============================================================
 //  Messaging_Core.hpp
@@ -21,6 +20,7 @@
 
 #include <Arduino.h>
 #include "Timer.hpp"
+#include <stdint.h>
 
 // ============================================================
 //  Constantes del protocolo
@@ -74,8 +74,6 @@ struct Reader {
     size_t  setCursor(size_t cur);
     Reader& skip(size_t num);
 };
-
-using MsgHandler = void (*)(Writer&, Reader&);
 
 // ============================================================
 //  Deadman — detecta ausencia del master
@@ -132,127 +130,6 @@ protected:
 };
 
 // ============================================================
-//  TxProtocol_Base<Derived> — CRTP
-//
-//  Contiene la lógica de protocolo de loadpackage:
-//    1. Validar tamaño
-//    2. Calcular CRC
-//    3. Ensamblar [0xAA | inst | size | payload... | CRC]
-//    4. Llamar Derived::sendBuffer(buf, len) — específico del transport
-//
-//  Derived debe implementar:
-//    bool sendBuffer(const uint8_t* buf, size_t len);
-// ============================================================
-template<typename Derived>
-class TxProtocol_Base {
-public:
-    bool loadpackage(uint8_t* payload, size_t payloadSize, uint8_t id, uint8_t seq) {
-        if (payloadSize > static_cast<size_t>(maxPayload())) return false;
-
-        // Calcular CRC antes de ensamblar
-        uint8_t crc = 0;
-        crc = calcCRC(0xAA,                 crc);
-        crc = calcCRC(id,                   crc);
-        crc = calcCRC(seq,                  crc);
-        crc = calcCRC((uint8_t)payloadSize, crc);
-        crc = calcCRC(payload, payloadSize, crc);
-
-        // Ensamblar frame completo en buffer de stack
-        // Tamaño máximo: MAX_PAYLOAD_SIZE + 4 bytes de framing
-        // Usamos el tamaño máximo posible (64) para el buffer estático
-        constexpr size_t BUF_SIZE = 64;  
-        uint8_t pkt[BUF_SIZE];
-        uint8_t pktLen = 0;
-
-        pkt[pktLen++] = 0xAA;
-        pkt[pktLen++] = id;
-        pkt[pktLen++] = seq;
-        pkt[pktLen++] = static_cast<uint8_t>(payloadSize);
-        memcpy(pkt + pktLen, payload, payloadSize);
-        pktLen += static_cast<uint8_t>(payloadSize);
-        pkt[pktLen++] = crc;
-
-        // Delegar el envío al transport concreto
-        return static_cast<Derived*>(this)->sendBuffer(pkt, pktLen);
-    }
-
-private:
-    // Obtener MAX_PAYLOAD_SIZE del Derived si lo define,
-    // o usar el valor por defecto del Core.
-    // El Derived puede sobreescribir maxPayload() para imponer su límite.
-    int maxPayload() const {
-        return static_cast<const Derived*>(this)->getMaxPayload();
-    }
-};
-
-// ============================================================
-//  RxProtocol — máquina de estados RX (idéntica en I2C y CAN)
-// ============================================================
-class RxProtocol : public DataRing<RX_RING_SIZE> {
-public:
-    // El responder es un puntero opaco a cualquier TxProtocol_Base<Derived>.
-    // Se llama via callback para evitar la dependencia de tipo en Core.
-    using LoadPackageFn = bool (*)(void*, uint8_t*, size_t, uint8_t, uint8_t);
-
-    explicit RxProtocol() = default;
-
-    /// Registrar el transmisor. tx_obj = puntero a TxProtocol concreto,
-    /// fn = wrapper estático que llama loadpackage.
-    void setResponder(void* tx_obj, LoadPackageFn fn) {
-        tx_obj_ = tx_obj;
-        tx_fn_  = fn;
-    }
-
-    void processPackets();
-
-private:
-    enum class RxState : uint8_t {
-        WAIT_SOF, READ_INST, READ_SEQ, READ_LEN, READ_PAYLOAD, READ_CRC
-    };
-
-    void dispatchPacket(uint8_t inst, uint8_t seq, uint8_t* payload, uint8_t size);
-
-    void*         tx_obj_ { nullptr };
-    LoadPackageFn tx_fn_  { nullptr };
-
-    Timer   timeout {};
-    RxState state   { RxState::WAIT_SOF };
-
-    uint8_t rxLen        { 0 };
-    uint8_t rxInst       { 0 };
-    uint8_t rxSeq        { 0 };
-    // MAX_PAYLOAD_SIZE puede variar — usamos el máximo posible (64)
-    uint8_t rxPayload[64];
-    uint8_t rxPayloadPos { 0 };
-    uint8_t rxCrc        { 0 };
-};
-
-// ============================================================
-//  Globales extern (definidas en el .ino)
-// ============================================================
-extern MsgHandler handlers[HANDLERS];
-extern MsgHandler writes[WRITE_HANDLERS];
-extern MsgHandler reads[READ_HANDLERS];
-extern Deadman    deadman;
-
-void ping(Writer& w, Reader& r);
-
-// ============================================================
-//  Helper para registrar el responder de manera type-safe
-//
-//  Uso en el .ino:
-//    RxSetResponder(rx, tx);
-//  Esto registra tx.loadpackage como callback de rx sin exponer
-//  el tipo concreto de TxProtocol en Messaging_Core.
-// ============================================================
-template<typename TxT>
-void RxSetResponder(RxProtocol& rx, TxT& tx) {
-    rx.setResponder(&tx, [](void* obj, uint8_t* payload, size_t size, uint8_t id, uint8_t seq) -> bool {
-        return static_cast<TxT*>(obj)->loadpackage(payload, size, id, seq);
-    });
-}
-
-// ============================================================
 //  IMPLEMENTACIONES INLINE / TEMPLATE
 // ============================================================
 
@@ -275,6 +152,7 @@ bool Reader::read(T& out) {
     cursor += sizeof(T);
     return true;
 }
+
 template<typename T>
 T Reader::readSafe(const T&) { T p; if (!read(p)) return T{}; return p; }
 inline bool   Reader::isDone()             const { return size <= cursor; }
@@ -309,3 +187,6 @@ template<int SIZE>
 uint32_t DataRing<SIZE>::getByteLoss() { return lost; }
 template<int SIZE>
 void DataRing<SIZE>::resetByteLoss() { lost = 0; }
+
+
+

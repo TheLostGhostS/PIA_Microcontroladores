@@ -1,179 +1,203 @@
-// ============================================================
-//  teensy.ino  — aplicación principal
-//  Incluir los tres módulos de la librería:
-//    Messaging.hpp     → protocolo I2C, Writer/Reader, CRC, ISRs
-//    Actuators.hpp     → StepperMotor, Updatable, Timer
-//    TemplateTraits.hpp → MemberAction, ForEachAction, etc.
-// ============================================================
-#include "Messaging.hpp"
-#include "Messaging_CAN.hpp"
-#include "Actuators.hpp"
-#include "TemplateTraits.hpp"
 #include "Timer.hpp"
+class Motor{
+public:
 
-// ============================================================
-//  Configuración de la aplicación
-// ============================================================
-constexpr int     NUM_STEP_MOTORS { 1    };
-constexpr int     NUM_UPDATABLES  { 1    };
-
-constexpr gpio_num_t TX_PIN = GPIO_NUM_21;
-constexpr gpio_num_t RX_PIN = GPIO_NUM_20;
-
-constexpr uint8_t  MY_ADDR   = 0x06;
-constexpr uint8_t  HOST_ADDR = 0 - MY_ADDR;
-constexpr uint16_t CHANNEL   = 0;
-
-// ============================================================
-//  Motores
-// ============================================================
-StepperMotor stepperMotor {  2, 3, 4, false, 5000 };
-
-
-StepperMotor*  stepperMotorArray [NUM_STEP_MOTORS]  { &stepperMotor };
-Updatable*     updatables        [NUM_UPDATABLES]   { &stepperMotor };
-
-// ============================================================
-//  Definición de globales del protocolo (extern en Messaging.hpp)
-// ============================================================
-MsgHandler handlers[HANDLERS]     = { nullptr };
-MsgHandler writes[WRITE_HANDLERS] = { nullptr };
-MsgHandler reads[READ_HANDLERS]   = { nullptr };
-
-TxProtocol tx;
-RxProtocol rx;
-
-template<typename Action, bool Masked = false>
-using ForEachStepper = ForEachAction<stepperMotorArray, NUM_STEP_MOTORS, Action, Masked>;
-
-// ============================================================
-//  Deadman
-// ============================================================
-void deadmanStop(){
-    for(int i = 0; i < NUM_STEP_MOTORS; i ++){
-        stepperMotorArray[i]->setVelocity(0.0f);
+    Motor() = default;
+    Motor(int pinA, int pinB){
+        initialize(pinA, pinB);
     }
-}
 
-// 100 ms
-Deadman deadman{ 1000000, &deadmanStop };
+    void initialize(int pinA, int pinB){
+        if(PinA < 0 && pinA >= 0){
+            PinA = pinA;
+            pinMode(PinA, OUTPUT);
+            digitalWrite(PinA, LOW);
+        }
 
-// ============================================================
-//  setup
-// ============================================================
+        if(PinB < 0 && pinB >= 0){
+            PinB = pinB;
+            pinMode(PinB, OUTPUT);
+            digitalWrite(PinB, LOW);
+        }
+    }
+
+    void update(){
+        if(!vel_count.active() || !vel_count.expired()){
+            return;
+        }
+
+        int work_pin = vel_percentage < 0 ? PinA : PinB;
+        float abs_vel = abs(vel_percentage)/100;
+        uint32_t cooldown {period * (running ? (1-abs_vel) : abs_vel)};
+        vel_count.setTimer(cooldown);
+
+        if(!vel_count.active()){
+            return;
+        }
+
+        running = !running;
+        digitalWrite(work_pin, running);
+        vel_count.restart();
+
+    };
+
+    void changeSpeed(float in_speed){
+        if(PinA < 0 || PinB < 0){
+            return;
+        }
+
+        if(in_speed > 100.0f || in_speed < -100.0f){
+            Serial.println(in_speed);
+            return;
+        }
+
+        vel_percentage = in_speed;
+        digitalWrite(PinA, LOW);
+        digitalWrite(PinB, LOW);
+        running = false;
+
+        if(vel_percentage == 0){
+            vel_count.setTimer(0);
+        }else{
+            vel_count.setTimer(1);
+            vel_count.restart();
+        }
+    }
+
+    void updateInterval(uint32_t milis_, bool is_micros = false){
+        period = milis_;
+        if(is_micros)
+            period *= 1000;
+    }
+ 
+    void forward()  { changeSpeed(  100 );  }
+    void backward() { changeSpeed( -100 );  }
+    void stop()     { changeSpeed(  0   );  }
+    
+private:
+
+    int PinA{-1}, PinB{-1};
+    Timer vel_count{0};
+    float vel_percentage{0};
+    bool running{false};
+    // 50 milis
+    uint32_t period{50000}; 
+    
+};
+
+class ACS{
+    public:
+    ACS() = default;
+    ACS(int pin, int max_ = 10, uint32_t poll = 20000){
+        max = max_;
+        polling.setTimer(poll);
+        polling.restart();
+        initialize(pin);
+    }
+
+    void initialize(int pin){
+        if(Pin < 0 && pin >= 0){
+            Pin = pin;
+            pinMode(Pin, INPUT);
+        }
+    }
+
+    void update(){
+        if(polling.active() && !polling.expired()){
+            return;
+        }
+        polling.restart();
+        cumulative += raw_read();
+        if(lectures++ == max){
+            pipe = cumulative / max;
+            ready = true;
+            cumulative = 0;
+            lectures = 0;
+        }
+    }
+
+    float raw_read(){
+        if(Pin < 0){
+            return 0;
+        }
+        float voltajeSensor= analogRead(A0)*(5.0 / 1023.0);  
+        return (voltajeSensor-2.5)/sencibility; 
+    }
+
+    float get_avarage(){
+        ready = false;
+        return pipe;
+    }
+
+    bool is_ready(){ return ready; }
+    void set_sencibility(float sens){ sencibility = sens; }
+    float get_sencibility(){ return sencibility; }
+    void set_max(float num){
+        if(num <= 0){
+            return;
+        }
+        max = num;
+    }
+    float get_max(){ return max; }
+    void set_poll(uint32_t num){
+        polling.setTimer(num);
+        polling.restart();
+    }
+
+    private:
+    int Pin{-1};
+    float sencibility{0.185};
+
+    // 20ms, 100ms per read non-blocking
+    Timer polling{20000}; 
+    float cumulative{0}, pipe{0};
+    int lectures{0}, max{5};
+    bool ready{false};
+
+};
+
+constexpr int PinIN1 = 7;
+constexpr int PinIN2 = 6;
+constexpr int PinAmp = A0;
+
+Timer ticking{20000};
+int state{1};
+Motor DC1;
+ACS sensor;
 void setup() {
     Serial.begin(115200);
+    while(!Serial);
 
-    RxSetResponder(rx, tx);
-
-    const float accel = 500.0f;
-
-    for(int i = 0; i < NUM_UPDATABLES; i++)
-        updatables[i]->begin();
-
-    for(int i = 0; i < NUM_STEP_MOTORS; i++){
-        stepperMotorArray[i]->setAcceleration(accel).setTargetStep(StepperMotor::NO_TARGET);
-    }
-
-    // Configurar TWAI (mismo estilo que tus archivos de ejemplo)
-    twai_general_config_t g_config =
-        TWAI_GENERAL_CONFIG_DEFAULT(TX_PIN, RX_PIN, TWAI_MODE_NORMAL);
-    twai_timing_config_t  t_config = TWAI_TIMING_CONFIG_500KBITS();
-
-    // Filtro de hardware: solo aceptar frames con rx_id (29-bit extended)
-    uint32_t rx_id = can_make_id(HOST_ADDR, MY_ADDR, CHANNEL);
-    twai_filter_config_t f_config = {
-        .acceptance_code = rx_id << 3,   // TWAI filtra por los 29 bits altos
-        .acceptance_mask = 0x00000007,   // los 3 bits bajos son flags, no filtrar
-        .single_filter   = true
-    };
-    //Serial.println("My id is: " + String(rx_id));
-
-    /*/
-    f_config = {
-        .acceptance_code = 0x00000000,
-        .acceptance_mask = 0xFFFFFFFF,
-        .single_filter   = true
-    };
-    //*/
-
-    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
-    ESP_ERROR_CHECK(twai_start());
-
-    // Configurar IDs en TxProtocol
-    uint32_t tx_id = can_make_id(MY_ADDR, HOST_ADDR, CHANNEL);
-    tx.setTxId(tx_id);
-    setRxId(rx_id);
-
-    // Registrar handlers de mensajes
-    // handlers[1] = ping;  // descomenta si quieres ping
-    // handlers[2] = myWriteHandler;
-    // handlers[3] = myReadHandler;
-
-    // Lanzar tarea de recepción CAN en core 0
-    // Loop() corre en core 1 (default de Arduino/ESP32)
-    xTaskCreatePinnedToCore(
-        canRxTask,   // función
-        "canRx",     // nombre
-        2048,        // stack bytes
-        nullptr,     // param
-        10,          // prioridad (alta para no perder frames)
-        nullptr,     // handle (no necesario)
-        0            // core 0
-    );
-
-    handlers[1] = ping;
-    handlers[2] = handlerCaller<writes, WRITE_HANDLERS>;
-    handlers[3] = handlerCaller<reads,  READ_HANDLERS>;
-
-    // Escrituras
-    registerHandler< 
-        ActionSequence<
-            InstanceAction<&rx, MemberAction<&RxProtocol::resetByteLoss>>>
-    >(writes, 0);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::setVelocity>>
-    >(writes, 1);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::setTargetStep>>
-    >(writes, 2);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::setAcceleration>>
-    >(writes, 3);
-
-    // Lecturas
-    registerHandler< 
-        ActionSequence<
-            InstanceAction<&rx, MemberAction<&RxProtocol::getByteLoss>>> 
-        >(reads, 0);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::getCurrentSpeed>>
-        >(reads, 1);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::getCurrentStep>>
-        >(reads, 2);
-
-    registerHandler<
-        ForEachStepper<MemberAction<&StepperMotor::getAcceleration>>
-        >(reads, 3);
-
+    DC1.initialize(PinIN1, PinIN2);
+    sensor.initialize(PinAmp);
+  	ticking.restart();
 }
 
-// ============================================================
-//  loop
-// ============================================================
 
 void loop() {
+
+    sensor.update();
+    DC1.update();
+
+    if(sensor.is_ready()){
+        Serial.print("Corriente: ");
+        Serial.println(sensor.get_avarage());
+    }
+
+    if(ticking.expired()){
+        ticking.restart();
+        switch(state){
+            case 1:
+            DC1.changeSpeed(50);
+            break;
+            case 2:
+            DC1.changeSpeed(-50);
+            break;
+            default:
+            state = 0;
+            DC1.stop();
+        }
+        state++;
+    }
     
-    for (int i = 0; i < NUM_UPDATABLES; i++)
-        updatables[i]->update();
-
-    rx.processPackets();
-
-    deadman.check();
 }
