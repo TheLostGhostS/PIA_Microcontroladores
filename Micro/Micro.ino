@@ -173,6 +173,66 @@ void setup() {
   	ticking.restart();
 }
 
+class Relay {
+public:
+
+    Relay() = default;
+
+    Relay(int pin, bool activeHigh = true) {
+        initialize(pin, activeHigh);
+    }
+
+    void initialize(int pin, bool activeHigh = true) {
+        if (Pin < 0 && pin >= 0) {
+            Pin = pin;
+            ActiveHigh = activeHigh;
+
+            pinMode(Pin, OUTPUT);
+            digitalWrite(Pin, offLevel());
+            state = false;
+        }
+    }
+
+    void turnOn() {
+        if (Pin < 0) {
+            return;
+        }
+
+        digitalWrite(Pin, onLevel());
+        state = true;
+    }
+
+    void turnOff() {
+        if (Pin < 0) {
+            return;
+        }
+
+        digitalWrite(Pin, offLevel());
+        state = false;
+    }
+
+    void shutdown() {
+        turnOff();
+    }
+
+    bool isOn() const {
+        return state;
+    }
+
+private:
+
+    int Pin{-1};
+    bool ActiveHigh{true};
+    bool state{false};
+
+    int onLevel() const {
+        return ActiveHigh ? HIGH : LOW;
+    }
+
+    int offLevel() const {
+        return ActiveHigh ? LOW : HIGH;
+    }
+};
 
 void loop() {
 
